@@ -1,5 +1,31 @@
 <div align="center">
   <img src="https://raw.githubusercontent.com/BrianPugh/gnwmanager/main/assets/screenshot.png">
+## PSRAM-only board support (`psram-only` branch)
+
+This branch makes the injected bootloader tolerant of G&W boards where the
+external NOR flash has been removed and replaced by an ISSI IS66WVS4M8FALL
+4MB PSRAM on the same OSPI bus (CE# on PE11):
+
+- `flash.c`: PSRAM command set (Read-ID 9Fh **with** the 24-bit don't-care
+  address phase, quad read EBh 1-4-4/6 dummy, page write 02h).
+  `OSPI_Init` never fails on an unknown JEDEC ID (a missing NOR must not
+  block internal-flash programming), OSPI read/write retries the full
+  command+data sequence with a peripheral re-init, and
+  `OSPI_EnableMemoryMappedMode` is a no-op.
+- `gnwmanager.c`: `sha256bank` only enables the mapped bus for external
+  banks, and `erase_intflash` erases sector-by-sector with an IWDG refresh
+  between sectors (the ~512ms IWDG window is shorter than a full-bank
+  blocking erase, especially with debugger halt time added).
+- Fault diagnostics: the fault handlers stash the caller LR, HAL status and
+  RCC/OSPI registers at 0x240F8000 (see `Core/Src/debug/faultcap.s`).
+
+Companion repos:
+
+- [CapnRon/game-and-watch-retro-go-sd](https://github.com/CapnRon/game-and-watch-retro-go-sd)
+  branch `psram-only` - the PSRAM-only Retro-Go SD firmware.
+- [CapnRon/gnw-stm32h7b0-diag-firmware](https://github.com/CapnRon/gnw-stm32h7b0-diag-firmware)
+  branch `ram-test` - diagnostic firmware with PSRAM CS auto-detection.
+
 </div>
 
 <div align="center">
