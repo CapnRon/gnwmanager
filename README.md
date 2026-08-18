@@ -1,5 +1,17 @@
 <div align="center">
   <img src="https://raw.githubusercontent.com/BrianPugh/gnwmanager/main/assets/screenshot.png">
+
+</div>
+
+<div align="center">
+
+![Python compat](https://img.shields.io/badge/>=python-3.9-blue.svg)
+[![PyPI](https://img.shields.io/pypi/v/gnwmanager.svg)](https://pypi.org/project/gnwmanager/)
+
+</div>
+
+# GnWManager
+
 ## PSRAM-only board support (`psram-only` branch)
 
 This branch makes the injected bootloader tolerant of G&W boards where the
@@ -26,16 +38,6 @@ Companion repos:
 - [CapnRon/gnw-stm32h7b0-diag-firmware](https://github.com/CapnRon/gnw-stm32h7b0-diag-firmware)
   branch `ram-test` - diagnostic firmware with PSRAM CS auto-detection.
 
-</div>
-
-<div align="center">
-
-![Python compat](https://img.shields.io/badge/>=python-3.9-blue.svg)
-[![PyPI](https://img.shields.io/pypi/v/gnwmanager.svg)](https://pypi.org/project/gnwmanager/)
-
-</div>
-
-# GnWManager
 
 GnWManager is THE game-and-watch device manager. GnWManager is a command line tool
 who's responsible for getting firmware onto your device, managing the filesystem,
