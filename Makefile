@@ -111,7 +111,7 @@ Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_iwdg.c
 
 
 # ASM sources
-ASM_SOURCES =  \
+ASM_SOURCES = Core/Src/debug/faultcap.s \
 startup_stm32h7b0xx.s
 
 

@@ -211,11 +211,20 @@ uint32_t erase_intflash(uint8_t bank, uint32_t offset, uint32_t size){
 
     EraseInitStruct.TypeErase = FLASH_TYPEERASE_SECTORS;
     EraseInitStruct.Banks = bank;  // Must be 1 or 2
-    EraseInitStruct.Sector = offset >> 13;
-    EraseInitStruct.NbSectors = size >> 13;
 
-    if (HAL_FLASHEx_Erase(&EraseInitStruct, &PAGEError) != HAL_OK) {
-        Error_Handler();
+    // Erase one sector at a time and refresh the IWDG between sectors.
+    // A single multi-sector HAL_FLASHEx_Erase blocks for hundreds of ms with
+    // no refresh; combined with debugger halt time that exceeds the ~512ms
+    // IWDG window and resets the device mid-erase.
+    const uint32_t total_sectors = size >> 13;
+    const uint32_t first_sector = offset >> 13;
+    for (uint32_t i = 0; i < total_sectors; i++) {
+        EraseInitStruct.Sector = first_sector + i;
+        EraseInitStruct.NbSectors = 1;
+        if (HAL_FLASHEx_Erase(&EraseInitStruct, &PAGEError) != HAL_OK) {
+            Error_Handler();
+        }
+        wdog_refresh();
     }
 
     HAL_FLASH_Lock();
@@ -224,7 +233,11 @@ uint32_t erase_intflash(uint8_t bank, uint32_t offset, uint32_t size){
 }
 
 static void sha256bank(uint8_t bank, uint8_t *digest, uint32_t offset, uint32_t size){
-    OSPI_EnableMemoryMappedMode();
+    // Only external-flash hashing needs the mapped bus; internal banks hash
+    // straight from the embedded flash.
+    if (bank == 0) {
+        OSPI_EnableMemoryMappedMode();
+    }
 
     uint32_t base_address;
     if(bank == 0){

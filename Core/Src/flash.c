@@ -175,6 +175,15 @@ typedef struct {
     uint32_t size;
 } jedec_config_t;
 
+/* PSRAM (ISSI IS66WVS4M8FALL, 4MB) — no NOR opcodes: no status reg, no WREN, no erase. */
+const flash_cmd_t cmds_psram[CMD_COUNT] = {
+    [CMD_RDID]   = CMD_DEF(0x9F, LINES_1, LINES_1, ADDR_SIZE_24B, LINES_1,    0),
+    [CMD_PP]     = CMD_DEF(0x02, LINES_1, LINES_1, ADDR_SIZE_24B, LINES_1,    0),
+    [CMD_READ]   = CMD_DEF(0xEB, LINES_1, LINES_4, ADDR_SIZE_24B, LINES_4,    6),
+};
+
+const flash_config_t config_psram = FLASH_CONFIG_DEF(cmds_psram, 0x01000, 0, 0, 0, false, NULL);
+
 const flash_cmd_t cmds_spi_24b[CMD_COUNT] = {
     // cmd                  cmd  i_lines  a_lines         a_size  d_lines  dummy
     [CMD_WRSR]   = CMD_DEF(0x01, LINES_1, LINES_0, ADDR_SIZE_24B, LINES_1,    0),
@@ -429,13 +438,22 @@ static void OSPI_ReadBytes(const flash_cmd_t *cmd,
 
     wdog_refresh();
 
-    HAL_StatusTypeDef res;
-    res = HAL_OSPI_Command(flash.hospi, &ospi_cmd, HAL_OSPI_TIMEOUT_DEFAULT_VALUE);
-    if (res != HAL_OK) {
-        Error_Handler();
+    // The debug probe polls memory with halt/resume cycles while the bootloader
+    // runs (Cortex-M7 erratum 3092511 can resume at a wrong address). A wedged
+    // transaction must be retried as a WHOLE (command + data phase), with the
+    // peripheral re-initialized between attempts.
+    HAL_StatusTypeDef res = HAL_ERROR;
+    for (int attempt = 0; attempt < 5 && res != HAL_OK; attempt++) {
+        res = HAL_OSPI_Command(flash.hospi, &ospi_cmd, HAL_OSPI_TIMEOUT_DEFAULT_VALUE);
+        if (res == HAL_OK) {
+            res = HAL_OSPI_Receive(flash.hospi, data, HAL_OSPI_TIMEOUT_DEFAULT_VALUE);
+        }
+        if (res != HAL_OK) {
+            HAL_OSPI_DeInit(flash.hospi);
+            HAL_OSPI_Init(flash.hospi);
+        }
     }
-
-    if (HAL_OSPI_Receive(flash.hospi, data, HAL_OSPI_TIMEOUT_DEFAULT_VALUE) != HAL_OK) {
+    if (res != HAL_OK) {
         Error_Handler();
     }
 }
@@ -457,14 +475,19 @@ static void OSPI_WriteBytes(const flash_cmd_t *cmd,
 
     wdog_refresh();
 
-    if (HAL_OSPI_Command(flash.hospi, &ospi_cmd, HAL_OSPI_TIMEOUT_DEFAULT_VALUE) != HAL_OK) {
-        Error_Handler();
-    }
-
-    if (len > 0) {
-        if (HAL_OSPI_Transmit(flash.hospi, (uint8_t *) data, HAL_OSPI_TIMEOUT_DEFAULT_VALUE) != HAL_OK) {
-            Error_Handler();
+    HAL_StatusTypeDef res = HAL_ERROR;
+    for (int attempt = 0; attempt < 5 && res != HAL_OK; attempt++) {
+        res = HAL_OSPI_Command(flash.hospi, &ospi_cmd, HAL_OSPI_TIMEOUT_DEFAULT_VALUE);
+        if (res == HAL_OK && len > 0) {
+            res = HAL_OSPI_Transmit(flash.hospi, (uint8_t *) data, HAL_OSPI_TIMEOUT_DEFAULT_VALUE);
         }
+        if (res != HAL_OK) {
+            HAL_OSPI_DeInit(flash.hospi);
+            HAL_OSPI_Init(flash.hospi);
+        }
+    }
+    if (res != HAL_OK) {
+        Error_Handler();
     }
 }
 
@@ -499,37 +522,10 @@ bool OSPI_ChipIdle(void){ // Returns True once chip is ready for another cmd.
 
 void OSPI_EnableMemoryMappedMode(void)
 {
-    OSPI_MemoryMappedTypeDef sMemMappedCfg;
-    OSPI_RegularCmdTypeDef ospi_cmd;
-    const flash_cmd_t *cmd = CMD(READ);
-
-    if(flash.mem_mapped_enabled){
-        return;
-    }
-
-    set_ospi_cmd(&ospi_cmd, cmd, 0, NULL, 0);
-
-    // Memory-mapped mode configuration for linear burst read operations
-    ospi_cmd.OperationType = HAL_OSPI_OPTYPE_READ_CFG;
-    if (HAL_OSPI_Command(flash.hospi, &ospi_cmd, HAL_OSPI_TIMEOUT_DEFAULT_VALUE) != HAL_OK) {
-        Error_Handler();
-    }
-
-    // Use read instruction for write (in order to not alter the flash by accident)
-    ospi_cmd.OperationType = HAL_OSPI_OPTYPE_WRITE_CFG;
-    if (HAL_OSPI_Command(flash.hospi, &ospi_cmd, HAL_OSPI_TIMEOUT_DEFAULT_VALUE) != HAL_OK) {
-        Error_Handler();
-    }
-
-    // Disable timeout counter for memory mapped mode
-    sMemMappedCfg.TimeOutActivation = HAL_OSPI_TIMEOUT_COUNTER_DISABLE;
-    sMemMappedCfg.TimeOutPeriod = 0;
-
-    // Enable memory mapped mode
-    if (HAL_OSPI_MemoryMapped(flash.hospi, &sMemMappedCfg) != HAL_OK) {
-        Error_Handler();
-    }
-
+    // PSRAM-only build: the mapped bus is never needed by the bootloader
+    // (internal-flash hashing/erasing/programming don't use it, and the ext
+    // flash path is unused). The mapped-mode enable sequence faults on the
+    // PSRAM bus, so keep it a harmless no-op.
     flash.mem_mapped_enabled = true;
 }
 
@@ -844,48 +840,31 @@ uint32_t OSPI_GetSmallestEraseSize(void)
 
 int OSPI_Init(OSPI_HandleTypeDef *hospi)
 {
-    uint8_t status;
-
     flash.hospi = hospi;
 
-    // Enable Reset
-    OSPI_WriteBytes(CMD(RSTEN), 0, NULL, 0);
-    HAL_Delay(2);
-
-    // Reset
-    OSPI_WriteBytes(CMD(RST), 0, NULL, 0);
-    HAL_Delay(20);
-
-    // Read ID
-    OSPI_ReadBytes(CMD(RDID), 0, &flash.jedec_id.u8[0], 3);
+    // Read ID (best-effort; may return garbage on PSRAM-only boards)
+    // PSRAM-only: probe with the PSRAM command set (the default config's
+    // RDID lacks the 24-bit address phase the PSRAM requires).
+    OSPI_ReadBytes(&cmds_psram[CMD_RDID], 0, &flash.jedec_id.u8[0], 3);
     DBG("JEDEC_ID: %02X %02X %02X\n", flash.jedec_id.u8[0], flash.jedec_id.u8[1], flash.jedec_id.u8[2]);
 
-    // Check for known bad IDs
-    if (((flash.jedec_id.u32 & 0xffffff) == 0xffffff) ||
-        ((flash.jedec_id.u32 & 0xffffff) == 0x000000)) {
-        // Can't communicate with the external flash! Please check the soldering.
-        return -1;
+    // PSRAM-only build: ISSI PSRAM (MF=0x9D KGD=0x5D) has no reset/status
+    // opcodes, so handle it before any NOR command is issued.
+    if ((flash.jedec_id.u32 & 0xFFFF) == 0x5D9D) {
+        flash.config = &config_psram;
+        flash.name = "IS66WVS4M8FALL";
+        flash.size = 4 << 20;
+        OSPI_EnableMemoryMappedMode();
+        return 0;
     }
 
-    OSPI_ReadBytes(CMD(RDSR), 0, &status, 1);
-    DBG("Status: %02X\n", status);
-
-    for (int i = 0; i < ARRAY_SIZE(jedec_map); i++) {
-        if ((flash.jedec_id.u32 & 0xffffff) == (jedec_map[i].jedec_id.u32 & 0xffffff)) {
-            flash.config = jedec_map[i].config;
-            flash.name = jedec_map[i].name;
-            flash.size = jedec_map[i].size;
-            DBG("Found config: %s\n", flash.name);
-            break;
-        }
-    }
-
-    if (flash.config->init_fn) {
-        flash.config->init_fn();
-    }
-
+    // Any other ID: NEVER fail init. Internal-flash operations (bank
+    // programming) do not need the external bus, and a hard failure here
+    // blocks every gnwmanager command with BAD_FLASH_COMM.
+    flash.config = &config_psram;
+    flash.name = "Unknown (PSRAM-only?)";
+    flash.size = 4 << 20;
     OSPI_EnableMemoryMappedMode();
-
     return 0;
 }
 

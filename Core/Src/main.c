@@ -1092,6 +1092,21 @@ void Error_Handler(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
   /* User can add his own implementation to report the HAL error return state */
+  *(volatile uint32_t *)0x240F8000 = (uint32_t)__builtin_return_address(0);
+  *(volatile uint32_t *)0x240F8008 = (uint32_t)__builtin_return_address(1);
+  {
+    uint32_t _r0;
+    __asm volatile("mov %0, r0" : "=r"(_r0));
+    *(volatile uint32_t *)0x240F8004 = _r0;
+  }
+  *(volatile uint32_t *)0x240F800C = hospi1.State;
+  *(volatile uint32_t *)0x240F8010 = hospi1.ErrorCode;
+  *(volatile uint32_t *)0x240F8014 = RCC->CR;
+  *(volatile uint32_t *)0x240F8018 = RCC->CFGR;
+  *(volatile uint32_t *)0x240F801C = RCC->CDCFGR1;
+  *(volatile uint32_t *)0x240F8020 = hospi1.Instance->CR;
+  *(volatile uint32_t *)0x240F8024 = hospi1.Instance->CCR;
+  *(volatile uint32_t *)0x240F8028 = hospi1.Instance->SR;
   gnwmanager_set_status(GNWMANAGER_STATUS_BAD_SEGFAULT);
 
   volatile int i = 1;  // Prevents optimizer from optimizing out infinite loop.
